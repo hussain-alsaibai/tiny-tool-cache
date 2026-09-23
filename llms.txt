@@ -1,0 +1,123 @@
+# llms.txt — tiny-tool-cache
+# Stdlib-only cache for tool / LLM call results. Bounded LRU, TTL, SWR,
+# negative-result caching, crash-safe JSONL disk persistence, async-coalesced
+# loads. Zero third-party dependencies. Single file. MIT.
+
+## What this solves
+- Duplicate tool/LLM calls within TTL return cached result (saves compute + cost).
+- Stale-while-revalidate: returns stale value while loader runs in background.
+- Negative-result caching: short-TTL cache of "tool returned []" stops retry storms.
+- Bounded LRU: max_entries ceiling.
+- Async coalescing: two concurrent calls for the same key share one loader.
+- Crash-safe disk persistence: append-only JSONL with fsync, replay on startup.
+
+## When NOT to use this
+- Need a semantic / embedding-similarity cache → use `tiny-semantic-cache`.
+- Need prompt-prefill caching → use `tiny-prompt-cache`.
+- Need pure-function memoization by arg hash → use `tiny-memo`.
+- Need cross-process sharing → use Redis.
+
+## Install (zero-deps)
+```bash
+# One file, no pip:
+curl -O https://raw.githubusercontent.com/hussain-alsaibai/tiny-tool-cache/main/tiny_tool_cache.py
+```
+
+## Public API (verbatim)
+
+```python
+@dataclass
+class NegativeCache:
+    ttl: float = 30.0
+    is_empty: Callable[[Any], bool] = lambda v: not v
+
+@dataclass
+class CacheStats:
+    hits: int = 0
+    misses: int = 0
+    stale_served: int = 0
+    negative_hits: int = 0
+    sets: int = 0
+    evictions: int = 0
+    expirations: int = 0
+    writes_to_disk: int = 0
+    loads_from_disk: int = 0
+    def hit_rate(self) -> float: ...
+    def to_dict(self) -> dict: ...
+
+class ToolCache:
+    def __init__(
+        self,
+        ttl_seconds: float = 300.0,
+        max_entries: int = 10_000,
+        persist_path: Optional[str] = None,
+        stale_while_revalidate: bool = True,
+        negative_cache: Optional[NegativeCache] = None,
+        clock: Callable[[], float] = time.time,
+    ): ...
+    def get(self, key) -> Any: ...
+    def peek_stale(self, key) -> Any: ...
+    def set(self, key, value, ttl=None, is_negative=False) -> None: ...
+    def invalidate(self, key) -> bool: ...
+    def clear(self) -> None: ...
+    def __contains__(self, key) -> bool: ...
+    def __len__(self) -> int: ...
+    def get_or_set(self, key, loader, *, ttl=None) -> Any: ...
+    async def aget_or_set(self, key, loader, *, ttl=None) -> Any: ...
+    def wrap(self, fn) -> Callable: ...
+    def awrap(self, fn) -> Callable: ...
+```
+
+## Minimal example
+
+```python
+from tiny_tool_cache import ToolCache, NegativeCache
+
+cache = ToolCache(
+    ttl_seconds=300,
+    max_entries=10_000,
+    negative_cache=NegativeCache(ttl=60, is_empty=lambda v: not v),
+)
+
+@cache.wrap
+def search_kb(query: str, limit: int = 10):
+    return kb_client.search(query, limit=limit)
+
+# Manual:
+cache.set(("kb.search", query, limit), result, ttl=300)
+hit = cache.get(("kb.search", query, limit))
+
+# Async, with coalescing:
+async def fetch(uid):
+    return await cache.aget_or_set(("users.find", uid), lambda: load_user(uid))
+```
+
+## Edge semantics
+- ttl_seconds <= 0 → ValueError
+- max_entries <= 0 → ValueError
+- Loader raises + stale exists + SWR on → return stale (sync & async)
+- Loader raises + stale exists + SWR off → raise
+- Loader raises + no stale → raise
+- Disk persistence: append-only JSONL; on startup, expired entries are skipped.
+- Cache key in `wrap`/`awrap` = (fn.__name__, frozen-args, frozen-kwargs). Order-independent kwargs.
+
+## Tests
+- 33/33 passing (`python3 -m unittest test_tiny_tool_cache`).
+- Coverage: basic get/set, TTL expiry, LRU eviction, get_or_set miss/hit, SWR stale, SWR failure fallback, negative-result caching, async miss/hit, async coalescing, async SWR fallback, sync/async wrap, kwargs-hashing, disk persistence (round-trip, expired-skip, JSONL shape), key freezing + JSON round-trip, edge cases.
+
+## Composition (tiny-* family)
+- `tiny-budget-ledger` (cap cost on the loader)
+- `tiny-trace-otel` (span per cache.get/cache.miss)
+- `tiny-rate-limiter` (gate the loader)
+- `tiny-cli-table` (render `cache.stats.to_dict()`)
+- `tiny-circuit-breaker` (trips when the loader keeps throwing)
+
+## Files in this repo
+- `tiny_tool_cache.py` — single-file library (~470 LOC including docstrings).
+- `test_tiny_tool_cache.py` — 33 unit tests.
+- `pyproject.toml` — pip-installable.
+- `README.md` — narrative docs.
+- `LICENSE` — MIT.
+
+## License
+MIT
