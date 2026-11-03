@@ -243,13 +243,13 @@ For manual usage, use a tuple: `("kb.search", query, limit)`.
 - No supply-chain surprise at 03:00.
 - No transitive version-conflict drama with the agent's other deps.
 
-The whole library is one file, ~470 LOC including docstrings, 33 unit tests, zero required imports beyond `time`, `json`, `os`, `asyncio`, `dataclasses`, `collections`, `typing`.
+The whole library is one file, ~530 LOC including docstrings, 33 unit tests, zero required imports beyond `time`, `json`, `os`, `asyncio`, `dataclasses`, `collections`, `typing`.
 
 ## Tests
 
 ```bash
 cd repos/tiny-tool-cache
-python3 -m unittest test_tiny_tool_cache       # 33/33 OK
+python3 -m pytest test_tiny_tool_cache.py       # 33/33 OK
 ```
 
 ## License
